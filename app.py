@@ -73,29 +73,29 @@ def merge_javanese_chars(chars):
         current = chars[i]
         next_char = chars[i + 1] if i + 1 < len(chars) else None
 
-        # RULE 1: 'da' + 'ra' -> 'ba'
-        if current == "da" and next_char == "ra":
-            merged.append("ba")
-            i += 2
-            continue
+        # # RULE 1: 'da' + 'ra' -> 'ba'
+        # if current == "da" and next_char == "ra":
+        #     merged.append("ba")
+        #     i += 2
+        #     continue
 
-        # RULE 2: 'nga' + 'nga' -> 'nga'
-        if current == "nga" and next_char == "nga":
-            merged.append("nga")
-            i += 2
-            continue
+        # # RULE 2: 'nga' + 'nga' -> 'nga'
+        # if current == "nga" and next_char == "nga":
+        #     merged.append("nga")
+        #     i += 2
+        #     continue
 
-        # RULE 3: 'tha' + 'nya' -> 'tha'
-        if current == "tha" and next_char == "nya":
-            merged.append("tha")
-            i += 2
-            continue
+        # # RULE 3: 'tha' + 'nya' -> 'tha'
+        # if current == "tha" and next_char == "nya":
+        #     merged.append("tha")
+        #     i += 2
+        #     continue
 
-        # RULE 4: 'na' + 'ya' -> 'nya'
-        if current == "na" and next_char == "ya":
-            merged.append("nya")
-            i += 2
-            continue
+        # # RULE 4: 'na' + 'ya' -> 'nya'
+        # if current == "na" and next_char == "ya":
+        #     merged.append("nya")
+        #     i += 2
+        #     continue
 
         # Default: keep as-is
         merged.append(current)
@@ -282,7 +282,6 @@ def main():
 Draw Aksara Jawa on the canvas **or** upload an image.
 
 The model:
-- Uses your **AutoGluon MultiModal** classifier  
 - Supports **character-level** and **word-level (OCR + merge)** prediction  
 - Produces a Latin “transliteration” from the predicted labels  
 """
@@ -298,6 +297,26 @@ The model:
         input_type = st.radio(
             "Input type",
             ["Sketch (canvas)", "Upload image"],
+        )
+
+        # Canvas size options for better usability on tablets/phones
+        canvas_size = st.selectbox(
+            "Canvas size",
+            [
+                "Small (256x256)",
+                "Medium (512x512)",
+                "Large (800x600)",
+            ],
+            index=2,
+        )
+
+        # Stroke width control (helps mobile finger/stylus input)
+        stroke_width = st.slider(
+            "Stroke width",
+            min_value=4,
+            max_value=40,
+            value=12,
+            step=1,
         )
 
         st.markdown("---")
@@ -316,13 +335,21 @@ The model:
         if input_type == "Sketch (canvas)":
             st.write("Draw your character or word below:")
 
+            # Map selected canvas size to width/height
+            if canvas_size.startswith("Small"):
+                canvas_w, canvas_h = 256, 256
+            elif canvas_size.startswith("Medium"):
+                canvas_w, canvas_h = 512, 512
+            else:
+                canvas_w, canvas_h = 800, 600
+
             canvas_result = st_canvas(
                 fill_color="rgba(0, 0, 0, 1)",
-                stroke_width=10,
+                stroke_width=stroke_width,
                 stroke_color="#000000",
                 background_color="#FFFFFF",
-                height=256,
-                width=256,
+                height=canvas_h,
+                width=canvas_w,
                 drawing_mode="freedraw",
                 key="canvas",
             )
