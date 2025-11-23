@@ -127,11 +127,14 @@ def segment_word_image(
     pad: int = 4,
 ):
     """
-    Segment a word-level image into character crops.
-    Logic adapted from your get_crops_from_image, but taking a PIL image.
-    Returns:
-      - crops: list[PIL.Image]
-      - boxes: list[(x, y, w, h)]
+    Segment a word-level image into *character* crops.
+
+    Steps:
+      1. Find contours (strokes)
+      2. Filter small noise
+      3. Sort left-to-right
+      4. Cluster horizontally-close contours -> 1 cluster = 1 character
+      5. For each cluster, make a union box and crop that region
     """
     img_rgb = np.array(pil_img.convert("RGB"))
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
@@ -144,18 +147,30 @@ def segment_word_image(
         bin_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    boxes = []
+    # 1) raw contour boxes (strokes)
+    stroke_boxes = []
     h_img, w_img = gray.shape
+
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        if w > min_w and h > min_h:
-            boxes.append((x, y, w, h))
+        if w > min_w and h > min_h:   # filter noise
+            stroke_boxes.append((x, y, w, h))
 
-    # Sort left-to-right
-    boxes.sort(key=lambda b: b[0])
+    if not stroke_boxes:
+        return [], []
 
+    # 2) sort left-to-right
+    stroke_boxes.sort(key=lambda b: b[0])
+
+    # 3) cluster strokes -> characters
+    clusters = cluster_boxes_horizontally(stroke_boxes)
+
+    # 4) union boxes per cluster = character boxes
+    char_boxes = [union_boxes(cl) for cl in clusters]
+
+    # 5) build crops for each character box
     crops = []
-    for (x, y, w, h) in boxes:
+    for (x, y, w, h) in char_boxes:
         y1 = max(0, y - pad)
         y2 = min(h_img, y + h + pad)
         x1 = max(0, x - pad)
@@ -163,7 +178,8 @@ def segment_word_image(
         crop = img_rgb[y1:y2, x1:x2]
         crops.append(Image.fromarray(crop))
 
-    return crops, boxes
+    return crops, char_boxes
+
 
 
 def draw_boxes_with_labels(
@@ -223,13 +239,73 @@ def predict_single_char(pil_img: Image.Image):
     return label, top3
 
 
+def classify_full_image(pil_img: Image.Image):
+    """Classify the full word image as if it were a single character."""
+    tmp_path = TMP_DIR / "full_word.png"
+    pil_img.convert("RGB").save(tmp_path)
+
+    df = pd.DataFrame({"image": [str(tmp_path)]})
+    proba = predictor.predict_proba(df).iloc[0]
+
+    label = proba.idxmax()
+    conf = float(proba.max())
+    return label, conf
+
+
+def cluster_boxes_horizontally(boxes, max_gap_ratio=0.30, min_gap_px=12):
+    """
+    Group nearby contour boxes into 'character clusters' along X axis.
+
+    boxes: list[(x, y, w, h)] sorted left-to-right.
+    Returns: list[list[(x, y, w, h)]]  (each inner list = 1 character)
+    """
+    if not boxes:
+        return []
+
+    clusters = [[boxes[0]]]
+
+    for box in boxes[1:]:
+        x, y, w, h = box
+        last = clusters[-1][-1]
+        last_x, last_y, last_w, last_h = last
+
+        last_right = last_x + last_w
+        gap = x - last_right
+
+        max_width = max(last_w, w)
+        threshold = max(min_gap_px, max_width * max_gap_ratio)
+
+        if gap <= threshold:
+            # still part of the same character
+            clusters[-1].append(box)
+        else:
+            # new character
+            clusters.append([box])
+
+    return clusters
+
+
+def union_boxes(cluster):
+    """Return one bounding box that covers all boxes in a cluster."""
+    xs  = [b[0] for b in cluster]
+    ys  = [b[1] for b in cluster]
+    x2s = [b[0] + b[2] for b in cluster]
+    y2s = [b[1] + b[3] for b in cluster]
+
+    x_min, y_min = min(xs), min(ys)
+    x_max, y_max = max(x2s), max(y2s)
+
+    return (x_min, y_min, x_max - x_min, y_max - y_min)
+
+
+
 def predict_word_from_image(pil_img: Image.Image):
     """
     Word mode:
-      1. Segment word into multiple character crops
-      2. Predict each crop
-      3. Use merge_javanese_chars to merge into a final Latin word
-      4. Also return confidence per character
+
+      1. Segment word into character crops using cluster-based boxes
+      2. Run the SAME AutoGluon model on each crop
+      3. Optionally merge labels with merge_javanese_chars
     """
     clear_tmp_dir()
 
@@ -244,23 +320,19 @@ def predict_word_from_image(pil_img: Image.Image):
         crop_paths.append(str(path))
 
     df = pd.DataFrame({"image": crop_paths})
-    preds = predictor.predict(df)
+    preds    = predictor.predict(df)
     proba_df = predictor.predict_proba(df)
 
-    raw_labels = []
+    raw_labels  = []
     confidences = []
 
-    # Align predictions and probabilities
     for i in range(len(df)):
-        if hasattr(preds, "iloc"):
-            lab = preds.iloc[i]
-        else:
-            lab = preds[i]
+        lab = preds.iloc[i] if hasattr(preds, "iloc") else preds[i]
         raw_labels.append(lab)
-        # Probability of the predicted label
         conf = float(proba_df.iloc[i][lab])
         confidences.append(conf)
 
+    # Merge chars into word (you can keep this, or use simple_concat instead)
     merged_word = merge_javanese_chars(raw_labels)
 
     return raw_labels, confidences, merged_word, boxes
@@ -408,9 +480,7 @@ The model:
 
         # Word mode
         else:
-            raw_labels, confidences, merged_word, boxes = predict_word_from_image(
-                pil_img
-            )
+            raw_labels, confidences, merged_word, boxes = predict_word_from_image(pil_img)
 
             if not raw_labels:
                 st.warning(
@@ -422,16 +492,20 @@ The model:
             st.write("Raw predicted sequence (per segment):")
             st.code(" ".join(raw_labels))
 
+            # Optional: also show simple concatenation without heuristic
+            simple_concat = "".join(raw_labels)
+
+            st.metric("Simple concatenation", simple_concat)
             st.metric(
                 "Merged word (Latin transliteration)",
                 merged_word if merged_word else "(empty)",
             )
             st.caption(
-                "Transliteration is produced by concatenating the predicted Latin labels "
-                "and applying your heuristic merge rules."
+                "All characters are predicted by the SAME AutoGluon model as in "
+                "character mode. 'Merged word' uses your merge_javanese_chars rules."
             )
 
-            # Per-character table: index, box, label, confidence
+            # Per-character table
             rows = []
             for idx, ((x, y, w, h), lab, conf) in enumerate(
                 zip(boxes, raw_labels, confidences)
@@ -449,18 +523,13 @@ The model:
                 )
 
             st.write("Per-character predictions:")
-            st.dataframe(
-                pd.DataFrame(rows),
-                use_container_width=True,
-            )
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-            # Annotated image with bounding boxes + labels + confidence
-            annotated_img = draw_boxes_with_labels(
-                pil_img, boxes, raw_labels, confidences
-            )
+            # Annotated image with bounding boxes + label + confidence
+            annotated_img = draw_boxes_with_labels(pil_img, boxes, raw_labels, confidences)
             st.image(
                 annotated_img,
-                caption="Segmented characters with label + confidence",
+                caption="Segmented characters with label + confidence (same model)",
                 use_column_width=True,
             )
 
