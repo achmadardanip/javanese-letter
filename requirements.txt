@@ -1,8 +1,9 @@
 numpy
 pandas
-opencv-python
+opencv-python-headless
 scikit-learn
 matplotlib
 streamlit
 streamlit-drawable-canvas
 autogluon
+Pillow
