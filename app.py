@@ -501,7 +501,7 @@ The model:
                 merged_word if merged_word else "(empty)",
             )
             st.caption(
-                "All characters are predicted by the SAME AutoGluon model as in "
+                "All characters are predicted by the SAME model as in "
                 "character mode. 'Merged word' uses your merge_javanese_chars rules."
             )
 
